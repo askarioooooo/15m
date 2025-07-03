@@ -2,7 +2,6 @@ import asyncio
 import aiohttp
 import time
 from datetime import datetime
-import pandas as pd
 from tqdm import tqdm
 
 BASE_URL = "https://fapi.binance.com"
@@ -47,86 +46,97 @@ async def fetch_last_month_klines(session, symbol):
             break
     return klines
 
-def analyze_symbol_daily(symbol, klines_1m):
-    df = pd.DataFrame(klines_1m, columns=[
-        "open_time", "open", "high", "low", "close", "volume",
-        "close_time", "quote_asset_volume", "number_of_trades",
-        "taker_buy_base_volume", "taker_buy_quote_volume", "ignore"
-    ])
-    df["open_time"] = pd.to_datetime(df["open_time"], unit='ms')
-    df["open"] = df["open"].astype(float)
-    df["high"] = df["high"].astype(float)
-    df["low"] = df["low"].astype(float)
-    df["close"] = df["close"].astype(float)
-    
-    df['date'] = df['open_time'].dt.date
-    
+def timestamp_to_date(ts_ms):
+    return datetime.utcfromtimestamp(ts_ms / 1000).date()
+
+def analyze_symbol_without_pandas(symbol, klines):
+    if not klines:
+        return []
+
+    # Группировка по дням
+    grouped = {}
+    for k in klines:
+        dt = timestamp_to_date(k[0])
+        if dt not in grouped:
+            grouped[dt] = []
+        grouped[dt].append(k)
+
     results = []
-    grouped = df.groupby('date')
-    
-    for day, group in grouped:
-        day_open = group.iloc[0]['open']
-        day_high = group['high'].max()
-        
+
+    for date_key in grouped:
+        candles = grouped[date_key]
+        if len(candles) < 2:
+            continue
+
+        day_open = float(candles[0][1])
+        day_high = max(float(c[2]) for c in candles)
+
         if day_high >= day_open * 1.10:
+            # Нашли рост на 10%
             threshold = day_open * 1.10
-            entry_row = group[group['high'] >= threshold].iloc[0]
+
+            # Находим первую свечу, пробившую +10%
+            entry_candle = next((c for c in candles if float(c[2]) >= threshold), None)
+            if not entry_candle:
+                continue
+
+            entry_time = datetime.utcfromtimestamp(entry_candle[0] / 1000)
             entry_price = threshold
-            
             take_profit = entry_price * 1.10
             stop_loss = entry_price * 0.99
-            
-            after_entry = group[group['open_time'] > entry_row['open_time']]
-            
+
             outcome = "HOLD"
-            for _, row in after_entry.iterrows():
-                if row['low'] <= stop_loss:
+            entry_index = candles.index(entry_candle)
+
+            for c in candles[entry_index + 1:]:
+                high = float(c[2])
+                low = float(c[3])
+                if low <= stop_loss:
                     outcome = "STOP"
                     break
-                if row['high'] >= take_profit:
+                if high >= take_profit:
                     outcome = "TAKE"
                     break
-            
+
             results.append({
                 "symbol": symbol,
-                "date": day,
-                "entry_time": entry_row['open_time'],
+                "date": str(date_key),
+                "entry_time": entry_time.strftime("%Y-%m-%d %H:%M:%S"),
                 "entry_price": round(entry_price, 6),
                 "take_profit": round(take_profit, 6),
                 "stop_loss": round(stop_loss, 6),
                 "outcome": outcome
             })
+
     return results
 
 async def main():
     async with aiohttp.ClientSession() as session:
         symbols = await get_symbols(session)
-        print(f"Found {len(symbols)} USDT perpetual symbols.")
-        
+        print(f"Найдено {len(symbols)} USDT perpetual символов.")
+
         all_results = []
-        
+
         for symbol in tqdm(symbols):
             try:
                 klines = await fetch_last_month_klines(session, symbol)
-                if klines:
-                    res = analyze_symbol_daily(symbol, klines)
-                    if res:
-                        all_results.extend(res)
+                res = analyze_symbol_without_pandas(symbol, klines)
+                all_results.extend(res)
             except Exception as e:
-                print(f"Error processing {symbol}: {e}")
-        
+                print(f"Ошибка с {symbol}: {e}")
+
         if all_results:
-            print(f"\nSignals found: {len(all_results)}")
             with open("signals_results.txt", "w", encoding="utf-8") as f:
                 for r in all_results:
                     line = (
                         f"{r['date']} | {r['symbol']} | Entry: {r['entry_time']} | "
-                        f"Entry Price: {r['entry_price']} | TP: {r['take_profit']} | SL: {r['stop_loss']} | Outcome: {r['outcome']}\n"
+                        f"Price: {r['entry_price']} | TP: {r['take_profit']} | "
+                        f"SL: {r['stop_loss']} | Outcome: {r['outcome']}\n"
                     )
                     f.write(line)
                     print(line, end='')
         else:
-            print("No signals found.")
+            print("Сигналы не найдены.")
 
 if __name__ == "__main__":
     asyncio.run(main())
