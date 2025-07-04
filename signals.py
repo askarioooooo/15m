@@ -52,7 +52,7 @@ def analyze_candles(symbol, klines):
     n = len(klines)
     i = 0
 
-    while i < n - 2:  # оставляем 2 свечи: сигнальную и свечу ожидания
+    while i < n - 2:
         candle = klines[i]
         open_time = candle[0]
         open_price = float(candle[1])
@@ -62,48 +62,52 @@ def analyze_candles(symbol, klines):
         if abs(change) >= 7:
             direction = "SHORT" if change > 0 else "LONG"
 
-            sl = close_price * 1.007 if direction == "SHORT" else close_price * 0.993
-            tp = None  # посчитаем позже от entry
-
             # Ждём 1 свечу
-            next_candle = klines[i + 1]
-            high = float(next_candle[2])
-            low = float(next_candle[3])
-            wait_close = float(next_candle[4])
-            wait_time = next_candle[0]
+            wait_candle = klines[i + 1]
+            high = float(wait_candle[2])
+            low = float(wait_candle[3])
+            wait_close = float(wait_candle[4])
+            wait_time = wait_candle[0]
 
-            # Проверяем: не задет ли SL или TP за эту 1 минуту
-            sl_hit = (high >= sl) if direction == "SHORT" else (low <= sl)
-            if sl_hit:
-                i += 1
-                continue  # сигнал отменяется
-
-            # Открываем сделку
+            # Вход будет по close следующей свечи
             entry = wait_close
-            tp = entry * 0.95 if direction == "SHORT" else entry * 1.05
 
-            # Размер стопа в процентах
-            sl_pct = (sl - entry) / entry * 100 if direction == "SHORT" else (entry - sl) / entry * 100
+            # SL и TP от точки входа
+            if direction == "SHORT":
+                sl = entry * 1.007
+                tp = entry * 0.95
+                sl_hit = high >= sl
+                tp_hit = low <= tp
+            else:
+                sl = entry * 0.993
+                tp = entry * 1.05
+                sl_hit = low <= sl
+                tp_hit = high >= tp
 
-            # Мониторим дальнейшие свечи
+            # Если за минуту до входа цена не пробила SL/TP — входим
+            if sl_hit or tp_hit:
+                i += 1
+                continue
+
+            # Мониторим движение после входа
             outcome = "NONE"
             for j in range(i + 2, n):
                 future = klines[j]
-                future_high = float(future[2])
-                future_low = float(future[3])
+                high = float(future[2])
+                low = float(future[3])
 
                 if direction == "SHORT":
-                    if future_low <= tp:
+                    if low <= tp:
                         outcome = "TAKE"
                         break
-                    elif future_high >= sl:
+                    elif high >= sl:
                         outcome = "STOP"
                         break
-                else:  # LONG
-                    if future_high >= tp:
+                else:
+                    if high >= tp:
                         outcome = "TAKE"
                         break
-                    elif future_low <= sl:
+                    elif low <= sl:
                         outcome = "STOP"
                         break
 
@@ -115,7 +119,7 @@ def analyze_candles(symbol, klines):
                     "entry": round(entry, 4),
                     "tp": round(tp, 4),
                     "sl": round(sl, 4),
-                    "sl_pct": round(sl_pct, 2),
+                    "sl_pct": round(abs(sl - entry) / entry * 100, 2),
                     "outcome": outcome
                 })
                 i = j + 1
@@ -125,7 +129,6 @@ def analyze_candles(symbol, klines):
             i += 1
 
     return results
-
 async def main():
     async with aiohttp.ClientSession() as session:
         symbols = await get_symbols(session)
@@ -148,11 +151,9 @@ async def main():
             output_lines.append("\nMatching signals found:\n")
             for r in all_results:
                 output_lines.append(
-                                  f"{r['time']} | {r['symbol']} | {r['direction']} | Entry: {r['entry']} | "
-                                  f"TP: {r['tp']} (+5%) | SL: {r['sl']} ({'-' if r['direction'] == 'SHORT' else ''}{r['sl_pct']}%) | "
-                                  f"Outcome: {r['outcome']}"
-                )
-
+                    f"{r['time']} | {r['symbol']} | {r['direction']} | Entry: {r['entry']} | "
+                    f"TP: {r['tp']} (+5%) | SL: {r['sl']} (-{r['sl_pct']}%) | Outcome: {r['outcome']}"
+               )
             # Подсчёт итогов
             take_count = sum(1 for r in all_results if r['outcome'] == 'TAKE')
             stop_count = sum(1 for r in all_results if r['outcome'] == 'STOP')
