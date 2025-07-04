@@ -52,69 +52,50 @@ def analyze_candles(symbol, klines):
     n = len(klines)
     i = 0
 
-    while i < n - 2:
+    while i < n - 1:
         candle = klines[i]
         open_time = candle[0]
         open_price = float(candle[1])
         close_price = float(candle[4])
         change = (close_price - open_price) / open_price * 100
 
-        if abs(change) >= 7:
+        if abs(change) >= 4:
             direction = "SHORT" if change > 0 else "LONG"
+            entry = close_price
 
-            # Ждём 1 свечу
-            wait_candle = klines[i + 1]
-            high = float(wait_candle[2])
-            low = float(wait_candle[3])
-            wait_close = float(wait_candle[4])
-            wait_time = wait_candle[0]
-
-            # Вход будет по close следующей свечи
-            entry = wait_close
-
-            # SL и TP от точки входа
             if direction == "SHORT":
-                sl = entry * 1.007
-                tp = entry * 0.95
-                sl_hit = high >= sl
-                tp_hit = low <= tp
+                tp = entry * 0.97
+                sl = entry * 1.01
             else:
-                sl = entry * 0.993
-                tp = entry * 1.05
-                sl_hit = low <= sl
-                tp_hit = high >= tp
+                tp = entry * 1.03
+                sl = entry * 0.99
 
-            # Если за минуту до входа цена не пробила SL/TP — входим
-            if sl_hit or tp_hit:
-                i += 1
-                continue
-
-            # Мониторим движение после входа
             outcome = "NONE"
-            for j in range(i + 2, n):
+
+            for j in range(i + 1, n):
                 future = klines[j]
                 high = float(future[2])
                 low = float(future[3])
 
                 if direction == "SHORT":
-                    if low <= tp:
-                        outcome = "TAKE"
-                        break
-                    elif high >= sl:
+                    if high >= sl:
                         outcome = "STOP"
+                        break
+                    elif low <= tp:
+                        outcome = "TAKE"
                         break
                 else:
-                    if high >= tp:
-                        outcome = "TAKE"
-                        break
-                    elif low <= sl:
+                    if low <= sl:
                         outcome = "STOP"
+                        break
+                    elif high >= tp:
+                        outcome = "TAKE"
                         break
 
             if outcome != "NONE":
                 results.append({
                     "symbol": symbol,
-                    "time": datetime.utcfromtimestamp(wait_time / 1000).strftime("%Y-%m-%d %H:%M"),
+                    "time": datetime.utcfromtimestamp(open_time / 1000).strftime("%Y-%m-%d %H:%M"),
                     "direction": direction,
                     "entry": round(entry, 4),
                     "tp": round(tp, 4),
@@ -129,6 +110,7 @@ def analyze_candles(symbol, klines):
             i += 1
 
     return results
+
 async def main():
     async with aiohttp.ClientSession() as session:
         symbols = await get_symbols(session)
@@ -152,8 +134,8 @@ async def main():
             for r in all_results:
                 output_lines.append(
                     f"{r['time']} | {r['symbol']} | {r['direction']} | Entry: {r['entry']} | "
-                    f"TP: {r['tp']} (+5%) | SL: {r['sl']} (-{r['sl_pct']}%) | Outcome: {r['outcome']}"
-               )
+                    f"TP: {r['tp']} (+3%) | SL: {r['sl']} (-{r['sl_pct']}%) | Outcome: {r['outcome']}"
+                )
             # Подсчёт итогов
             take_count = sum(1 for r in all_results if r['outcome'] == 'TAKE')
             stop_count = sum(1 for r in all_results if r['outcome'] == 'STOP')
