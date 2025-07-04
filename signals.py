@@ -1,9 +1,8 @@
 import asyncio
 import aiohttp
 import time
-import pandas as pd
+from datetime import datetime
 from tqdm import tqdm
-from datetime import datetime, timedelta
 
 BASE_URL = "https://fapi.binance.com"
 
@@ -36,7 +35,7 @@ async def get_klines(session, symbol, interval="1m", limit=1000, start_time=None
 
 async def fetch_last_3_days_klines(session, symbol):
     now = int(time.time() * 1000)
-    three_days_ago = now - 30 * 24 * 60 * 60 * 1000  # 3 дня в мс
+    three_days_ago = now - 3 * 24 * 60 * 60 * 1000  # 3 дня в миллисекундах
     klines = []
     current = three_days_ago
 
@@ -45,29 +44,19 @@ async def fetch_last_3_days_klines(session, symbol):
         if not data:
             break
         klines.extend(data)
-        current = data[-1][0] + 60_000  # следующий интервал
+        current = data[-1][0] + 60_000  # 1 минута вперёд
     return klines
 
 def analyze_candles(symbol, klines):
-    df = pd.DataFrame(klines, columns=[
-        "open_time", "open", "high", "low", "close", "volume",
-        "close_time", "quote_asset_volume", "number_of_trades",
-        "taker_buy_base_volume", "taker_buy_quote_volume", "ignore"
-    ])
-
-    df["open"] = df["open"].astype(float)
-    df["close"] = df["close"].astype(float)
-    df["high"] = df["high"].astype(float)
-    df["low"] = df["low"].astype(float)
-    df["open_time"] = pd.to_datetime(df["open_time"], unit='ms')
-
     results = []
+    n = len(klines)
     i = 0
-    n = len(df)
 
     while i < n - 1:
-        open_price = df.iloc[i]["open"]
-        close_price = df.iloc[i]["close"]
+        candle = klines[i]
+        open_time = candle[0]
+        open_price = float(candle[1])
+        close_price = float(candle[4])
         change = (close_price - open_price) / open_price * 100
 
         if abs(change) >= 4:
@@ -81,9 +70,9 @@ def analyze_candles(symbol, klines):
             exit_index = None
 
             for j in range(i + 1, n):
-                row = df.iloc[j]
-                high = row["high"]
-                low = row["low"]
+                next_candle = klines[j]
+                high = float(next_candle[2])
+                low = float(next_candle[3])
 
                 if direction == "LONG":
                     if high >= sl:
@@ -107,7 +96,7 @@ def analyze_candles(symbol, klines):
             if outcome in ["TAKE", "STOP"]:
                 results.append({
                     "symbol": symbol,
-                    "time": df.iloc[i]["open_time"],
+                    "time": datetime.utcfromtimestamp(open_time / 1000),
                     "direction": direction,
                     "change": round(change, 2),
                     "outcome": outcome
