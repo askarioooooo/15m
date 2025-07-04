@@ -52,56 +52,73 @@ def analyze_candles(symbol, klines):
     n = len(klines)
     i = 0
 
-    while i < n - 1:
+    while i < n - 2:  # оставляем 2 свечи: сигнальную и свечу ожидания
         candle = klines[i]
         open_time = candle[0]
         open_price = float(candle[1])
         close_price = float(candle[4])
         change = (close_price - open_price) / open_price * 100
 
-        if abs(change) >= 4:
-            direction = "LONG" if change > 0 else "SHORT"
-            entry_price = close_price
+        if abs(change) >= 7:
+            direction = "SHORT" if change > 0 else "LONG"
 
-            tp = entry_price * (1 - 0.05) if direction == "LONG" else entry_price * (1 + 0.05)
-            sl = entry_price * (1 + 0.007) if direction == "LONG" else entry_price * (1 - 0.007)
+            sl = close_price * 1.007 if direction == "SHORT" else close_price * 0.993
+            tp = None  # посчитаем позже от entry
 
+            # Ждём 1 свечу
+            next_candle = klines[i + 1]
+            high = float(next_candle[2])
+            low = float(next_candle[3])
+            wait_close = float(next_candle[4])
+            wait_time = next_candle[0]
+
+            # Проверяем: не задет ли SL или TP за эту 1 минуту
+            sl_hit = (high >= sl) if direction == "SHORT" else (low <= sl)
+            if sl_hit:
+                i += 1
+                continue  # сигнал отменяется
+
+            # Открываем сделку
+            entry = wait_close
+            tp = entry * 0.95 if direction == "SHORT" else entry * 1.05
+
+            # Размер стопа в процентах
+            sl_pct = (sl - entry) / entry * 100 if direction == "SHORT" else (entry - sl) / entry * 100
+
+            # Мониторим дальнейшие свечи
             outcome = "NONE"
-            exit_index = None
+            for j in range(i + 2, n):
+                future = klines[j]
+                future_high = float(future[2])
+                future_low = float(future[3])
 
-            for j in range(i + 1, n):
-                next_candle = klines[j]
-                high = float(next_candle[2])
-                low = float(next_candle[3])
-
-                if direction == "LONG":
-                    if high >= sl:
-                        outcome = "STOP"
-                        exit_index = j
-                        break
-                    elif low <= tp:
+                if direction == "SHORT":
+                    if future_low <= tp:
                         outcome = "TAKE"
-                        exit_index = j
                         break
-                else:  # SHORT
-                    if low <= sl:
+                    elif future_high >= sl:
                         outcome = "STOP"
-                        exit_index = j
                         break
-                    elif high >= tp:
+                else:  # LONG
+                    if future_high >= tp:
                         outcome = "TAKE"
-                        exit_index = j
+                        break
+                    elif future_low <= sl:
+                        outcome = "STOP"
                         break
 
-            if outcome in ["TAKE", "STOP"]:
+            if outcome != "NONE":
                 results.append({
                     "symbol": symbol,
-                    "time": datetime.utcfromtimestamp(open_time / 1000),
+                    "time": datetime.utcfromtimestamp(wait_time / 1000).strftime("%Y-%m-%d %H:%M"),
                     "direction": direction,
-                    "change": round(change, 2),
+                    "entry": round(entry, 4),
+                    "tp": round(tp, 4),
+                    "sl": round(sl, 4),
+                    "sl_pct": round(sl_pct, 2),
                     "outcome": outcome
                 })
-                i = exit_index + 1 if exit_index is not None else i + 1
+                i = j + 1
             else:
                 i += 1
         else:
@@ -131,7 +148,9 @@ async def main():
             output_lines.append("\nMatching signals found:\n")
             for r in all_results:
                 output_lines.append(
-                    f"{r['time']} | {r['symbol']} | {r['direction']} | {r['change']}% -> {r['outcome']}"
+                                  f"{r['time']} | {r['symbol']} | {r['direction']} | Entry: {r['entry']} | "
+                                  f"TP: {r['tp']} (+5%) | SL: {r['sl']} ({'-' if r['direction'] == 'SHORT' else ''}{r['sl_pct']}%) | "
+                                  f"Outcome: {r['outcome']}"
                 )
 
             # Подсчёт итогов
