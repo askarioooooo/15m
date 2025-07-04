@@ -35,7 +35,7 @@ async def get_klines(session, symbol, interval="1m", limit=1000, start_time=None
 
 async def fetch_last_3_days_klines(session, symbol):
     now = int(time.time() * 1000)
-    three_days_ago = now - 3 * 24 * 60 * 60 * 1000  # 3 дня в миллисекундах
+    three_days_ago = now - 30 * 24 * 60 * 60 * 1000  # 3 дня в миллисекундах
     klines = []
     current = three_days_ago
 
