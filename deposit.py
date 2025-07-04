@@ -1,68 +1,75 @@
 from datetime import datetime, timedelta
 
-# Чтение из output.txt
-with open("output.txt", "r") as f:
-    lines = [line.strip() for line in f if line.strip()]
+# Настройки
+START_DEPOSIT = 1
+TAKE_PROFIT = 0.03
+STOP_LOSS = -0.01
 
-deposit_start = 3.0  # Начальный депозит
+# Загрузка сделок
+with open("filtered_output.txt", "r", encoding="utf-8") as f:
+    lines = f.readlines()
 
-def simulate(stop_streak_limit, ignore_days_after_stop):
-    deposit = deposit_start
-    stop_streak = 0
-    ignore_until = None
+# Преобразование сделок в список словарей
+trades = []
+for line in lines:
+    try:
+        dt_str, symbol, direction, *_rest, outcome_part = line.strip().split('|')
+        dt = datetime.strptime(dt_str.strip(), "%Y-%m-%d %H:%M")
+        direction = direction.strip()
+        outcome = outcome_part.strip().split(":")[-1].strip()
+        trades.append({"datetime": dt, "direction": direction, "outcome": outcome})
+    except Exception as e:
+        print(f"Ошибка разбора строки: {line}\n{e}")
 
-    for line in lines:
-        timestamp_str = line.split('|')[0].strip()
-        try:
-            timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            continue  # Пропустить некорректную строку
+# Сортировка по дате
+trades.sort(key=lambda x: x["datetime"])
 
-        # Пропустить сделку, если попадает в период блокировки
-        if ignore_until and timestamp < ignore_until:
+# Параметры перебора
+max_consecutive_stops_range = range(0, 6)
+block_days_range = range(0, 11)
+directions_variants = {
+    "ALL": lambda d: True,
+    "LONG_ONLY": lambda d: d == "LONG",
+    "SHORT_ONLY": lambda d: d == "SHORT"
+}
+
+# Функция симуляции
+def simulate(trades, max_stops, block_days, direction_filter):
+    deposit = START_DEPOSIT
+    last_block_time = None
+    consecutive_stops = 0
+
+    for trade in trades:
+        if not direction_filter(trade["direction"]):
             continue
 
-        base = 0.8 * deposit
-        reserve = 0.2 * deposit
+        # Пропустить сделки в блоке
+        if last_block_time and trade["datetime"] < last_block_time:
+            continue
 
-        if 'TAKE' in line:
-            profit = base * 1
-            base += profit
-            stop_streak = 0
-        elif 'STOP' in line:
-            loss = base * 0.2
-            base -= loss
-            stop_streak += 1
+        # Применение исхода сделки
+        if trade["outcome"] == "TAKE":
+            deposit *= (1 + TAKE_PROFIT)
+            consecutive_stops = 0
+        elif trade["outcome"] == "STOP":
+            deposit *= (1 + STOP_LOSS)
+            consecutive_stops += 1
 
-            if stop_streak_limit > 0 and stop_streak >= stop_streak_limit:
-                ignore_until = timestamp + timedelta(days=ignore_days_after_stop)
-                stop_streak = 0
-        else:
-            stop_streak = 0
+            # Если достигли лимита стопов — блокируем
+            if consecutive_stops >= max_stops:
+                last_block_time = trade["datetime"] + timedelta(days=block_days)
+                consecutive_stops = 0
 
-        deposit = base + reserve
-        if deposit < 3:
-            deposit = 3
+    return round(deposit, 2)
 
-    return deposit
-
-results = []
-for stop_limit in range(0, 6):  # от 0 до 5 подряд стопов
-    for days_block in range(0, 21):  # от 0 до 20 дней блокировки
-        if stop_limit == 0 and days_block > 0:
-            continue  # нет смысла блокировать без условия
-
-        final = simulate(stop_limit, days_block)
-        if stop_limit == 0:
-            label = "Без блокировки вообще"
-        else:
-            label = f"После {stop_limit} STOP'ов подряд → блок {days_block} дн."
-
-        results.append(f"{label} → Итоговый депозит: {final:.4f}")
-
-# Сохраняем
-with open("deposit_variants.txt", "w") as f:
-    f.write("\n".join(results))
-
-# Вывод в консоль
-print("\n".join(results))
+# Сохранение результатов
+with open("deposit_variants.txt", "w", encoding="utf-8") as f_out:
+    for dir_label, filter_func in directions_variants.items():
+        f_out.write(f"=== {dir_label} ===\n")
+        for max_stops in max_consecutive_stops_range:
+            for block_days in block_days_range:
+                final_deposit = simulate(trades, max_stops, block_days, filter_func)
+                f_out.write(
+                    f"Stops before block: {max_stops}, Block days: {block_days} => Final deposit: {final_deposit}\n"
+                )
+        f_out.write("\n")
