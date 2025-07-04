@@ -35,7 +35,7 @@ async def get_klines(session, symbol, interval="1m", limit=1000, start_time=None
 
 async def fetch_last_3_days_klines(session, symbol):
     now = int(time.time() * 1000)
-    three_days_ago = now - 30 * 24 * 60 * 60 * 1000  # 3 дня в миллисекундах
+    three_days_ago = now - 3 * 24 * 60 * 60 * 1000
     klines = []
     current = three_days_ago
 
@@ -44,10 +44,10 @@ async def fetch_last_3_days_klines(session, symbol):
         if not data:
             break
         klines.extend(data)
-        current = data[-1][0] + 60_000  # 1 минута вперёд
+        current = data[-1][0] + 60_000
     return klines
 
-def analyze_candles(symbol, klines):
+def analyze_candles(symbol, klines, tp_percent):
     results = []
     n = len(klines)
     i = 0
@@ -64,10 +64,10 @@ def analyze_candles(symbol, klines):
             entry = close_price
 
             if direction == "SHORT":
-                tp = entry * 0.97
+                tp = entry * (1 - tp_percent / 100)
                 sl = entry * 1.01
             else:
-                tp = entry * 1.03
+                tp = entry * (1 + tp_percent / 100)
                 sl = entry * 0.99
 
             outcome = "NONE"
@@ -101,7 +101,9 @@ def analyze_candles(symbol, klines):
                     "tp": round(tp, 4),
                     "sl": round(sl, 4),
                     "sl_pct": round(abs(sl - entry) / entry * 100, 2),
-                    "outcome": outcome
+                    "candle_change": round(change, 2),
+                    "outcome": outcome,
+                    "tp_pct": tp_percent
                 })
                 i = j + 1
             else:
@@ -114,44 +116,41 @@ def analyze_candles(symbol, klines):
 async def main():
     async with aiohttp.ClientSession() as session:
         symbols = await get_symbols(session)
-        output_lines = []
-        output_lines.append(f"Found {len(symbols)} symbols. Starting analysis...\n")
-
-        all_results = []
+        tp_levels = [3, 5, 7.5, 10]
+        all_results_by_tp = {tp: [] for tp in tp_levels}
 
         for symbol in tqdm(symbols):
             try:
                 klines = await fetch_last_3_days_klines(session, symbol)
-                result = analyze_candles(symbol, klines)
-                if result:
-                    all_results.extend(result)
+                for tp in tp_levels:
+                    results = analyze_candles(symbol, klines, tp_percent=tp)
+                    if results:
+                        all_results_by_tp[tp].extend(results)
             except Exception as e:
-                output_lines.append(f"Error for {symbol}: {e}")
+                print(f"Error for {symbol}: {e}")
                 continue
 
-        if all_results:
-            output_lines.append("\nMatching signals found:\n")
-            for r in all_results:
-                output_lines.append(
-                    f"{r['time']} | {r['symbol']} | {r['direction']} | Entry: {r['entry']} | "
-                    f"TP: {r['tp']} (+3%) | SL: {r['sl']} (-{r['sl_pct']}%) | Outcome: {r['outcome']}"
-                )
-            # Подсчёт итогов
-            take_count = sum(1 for r in all_results if r['outcome'] == 'TAKE')
-            stop_count = sum(1 for r in all_results if r['outcome'] == 'STOP')
-            be_count = sum(1 for r in all_results if r['outcome'] == 'BE')
+        for tp in tp_levels:
+            results = all_results_by_tp[tp]
+            filename = f"signals_tp{str(tp).replace('.', '_')}.txt"
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write(f"Strategy: TP {tp}%, SL 1%\n")
+                f.write(f"Total signals: {len(results)}\n\n")
 
-            output_lines.append(f"\nSummary:")
-            output_lines.append(f"TAKE: {take_count}")
-            output_lines.append(f"STOP: {stop_count}")
-            output_lines.append(f"BE:   {be_count}")
-            output_lines.append(f"TOTAL: {len(all_results)} signals")
-        else:
-            output_lines.append("\nNo matching signals found.")
+                take_count = sum(1 for r in results if r['outcome'] == "TAKE")
+                stop_count = sum(1 for r in results if r['outcome'] == "STOP")
 
-        # Save to file
-        with open("signals_output_4.txt", "w", encoding="utf-8") as f:
-            f.write("\n".join(output_lines))
+                for r in results:
+                    f.write(
+                        f"{r['time']} | {r['symbol']} | {r['direction']} | Entry: {r['entry']} | "
+                        f"TP: {r['tp']} (+{tp}%) | SL: {r['sl']} (-{r['sl_pct']}%) | "
+                        f"Candle: {r['candle_change']}% | Outcome: {r['outcome']}\n"
+                    )
+
+                f.write("\nSummary:\n")
+                f.write(f"TAKE: {take_count}\n")
+                f.write(f"STOP: {stop_count}\n")
 
 if __name__ == "__main__":
     asyncio.run(main())
+                
