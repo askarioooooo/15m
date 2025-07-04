@@ -1,33 +1,15 @@
-from datetime import datetime
+# Удаление повторяющихся сделок по точному времени (дата + время)
+seen_times = set()
+filtered_lines = []
 
-# Чтение из предыдущего результата
-with open("output.txt", "r") as f:
-    lines = f.read().strip().split('\n')
-
-seen_timestamps = set()
-last_pair = None
-final_lines = []
-
-for line in lines:
-    try:
-        parts = line.split('|')
-        timestamp = parts[0].strip()
-        pair = parts[1].strip()
-
-        # Пропустить, если уже есть сделка в это время
-        if timestamp in seen_timestamps:
-            continue
-
-        # Пропустить, если такая же пара была в предыдущей строке
-        if pair == last_pair:
-            continue
-
-        final_lines.append(line)
-        seen_timestamps.add(timestamp)
-        last_pair = pair
-    except:
-        continue
+with open('output.txt', 'r', encoding='utf-8') as infile:
+    for line in infile:
+        # Извлекаем дату и время из начала строки (первые 16 символов)
+        timestamp = line[:16]
+        if timestamp not in seen_times:
+            seen_times.add(timestamp)
+            filtered_lines.append(line)
 
 # Сохраняем результат
-with open("output.txt", "w") as f:
-    f.write('\n'.join(final_lines))
+with open('filtered_output.txt', 'w', encoding='utf-8') as outfile:
+    outfile.writelines(filtered_lines)
