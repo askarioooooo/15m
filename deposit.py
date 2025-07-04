@@ -30,7 +30,7 @@ def simulate(stop_streak_limit, ignore_days_after_stop):
             base += profit
             stop_streak = 0
         elif 'STOP' in line:
-            loss = base * 0.25
+            loss = base * 0.2
             base -= loss
             stop_streak += 1
 
